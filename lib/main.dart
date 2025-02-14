@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'package:excel/excel.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'dart:io';
 import 'dart:async';
 
 void main() {
@@ -67,26 +71,77 @@ class _LecturerDashboardState extends State<LecturerDashboard> {
     _refreshStudentList();
   }
 
+  void _saveMaxDays() {
+    setState(() {
+      _refreshStudentList();
+    });
+  }
+
   double _calculateMarks(int attended, int maxDays) {
     if (maxDays <= 0) return 0;
     return (attended / maxDays) * 10;
+  }
+
+  Future<void> _generateAndShareExcel() async {
+    final excel = Excel.createExcel();
+    final sheet = excel['Attendance'];
+
+    sheet.appendRow([
+      TextCellValue('Name'),
+      TextCellValue('Reg Number'),
+      TextCellValue('Attended Days'),
+      TextCellValue('Marks')
+    ]);
+    int maxDays = int.tryParse(_maxDaysController.text) ?? 1;
+
+    for (var student in _students) {
+      int attended = (student['attended'] as int?) ?? 0;
+      double marks = _calculateMarks(attended, maxDays);
+      sheet.appendRow([
+        TextCellValue(student['name']),
+        TextCellValue(student['regNumber']),
+        IntCellValue(attended),
+        TextCellValue(marks.toStringAsFixed(2))
+      ]);
+    }
+
+    final directory = await getApplicationDocumentsDirectory();
+    final filePath = p.join(directory.path, 'AttendanceReport.xlsx');
+    final file = File(filePath);
+    await file.writeAsBytes(excel.encode()!);
+
+    await Share.shareXFiles([XFile(filePath)], text: 'Class Attendance Report');
+  }
+
+  void _navigateToStudentRegistration() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => StudentRegistrationPage(
+            database: _database, refreshList: _refreshStudentList),
+      ),
+    ).then((_) => _refreshStudentList());
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('Class Attendance System')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (context) => StudentRegistrationPage(
-                    database: _database, refreshList: _refreshStudentList)),
-          );
-          _refreshStudentList();
-        },
-        child: Icon(Icons.person_add),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton(
+            heroTag: 'share',
+            onPressed: _generateAndShareExcel,
+            child: Icon(Icons.share),
+          ),
+          SizedBox(height: 10),
+          FloatingActionButton(
+            heroTag: 'add_student',
+            onPressed: _navigateToStudentRegistration,
+            child: Icon(Icons.person_add),
+          ),
+        ],
       ),
       body: Padding(
         padding: EdgeInsets.all(16.0),
@@ -103,7 +158,7 @@ class _LecturerDashboardState extends State<LecturerDashboard> {
             ),
             SizedBox(height: 15),
             ElevatedButton(
-              onPressed: () => setState(() {}),
+              onPressed: _saveMaxDays,
               child: Text('Save'),
             ),
             SizedBox(height: 15),
@@ -151,37 +206,24 @@ class _LecturerDashboardState extends State<LecturerDashboard> {
   }
 }
 
-class StudentRegistrationPage extends StatefulWidget {
+class StudentRegistrationPage extends StatelessWidget {
   final Database? database;
   final Function refreshList;
-  StudentRegistrationPage({this.database, required this.refreshList});
 
-  @override
-  _StudentRegistrationPageState createState() =>
-      _StudentRegistrationPageState();
-}
+  StudentRegistrationPage({required this.database, required this.refreshList});
 
-class _StudentRegistrationPageState extends State<StudentRegistrationPage> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _regNumberController = TextEditingController();
 
-  Future<void> _registerStudent() async {
+  Future<void> _registerStudent(BuildContext context) async {
     if (_nameController.text.isNotEmpty &&
         _regNumberController.text.isNotEmpty) {
-      await widget.database?.insert(
-        'students',
-        {'name': _nameController.text, 'regNumber': _regNumberController.text},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Student Registered Successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-      widget.refreshList();
-      _nameController.clear();
-      _regNumberController.clear();
+      await database?.insert('students', {
+        'name': _nameController.text,
+        'regNumber': _regNumberController.text
+      });
+      refreshList();
+      Navigator.pop(context);
     }
   }
 
@@ -194,25 +236,15 @@ class _StudentRegistrationPageState extends State<StudentRegistrationPage> {
         child: Column(
           children: [
             TextField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                labelText: 'Student Name',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            SizedBox(height: 10),
+                controller: _nameController,
+                decoration: InputDecoration(labelText: 'Student Name')),
             TextField(
-              controller: _regNumberController,
-              decoration: InputDecoration(
-                labelText: 'Registration Number',
-                border: OutlineInputBorder(),
-              ),
-            ),
+                controller: _regNumberController,
+                decoration: InputDecoration(labelText: 'Registration Number')),
             SizedBox(height: 20),
             ElevatedButton(
-              onPressed: _registerStudent,
-              child: Text('Register'),
-            ),
+                onPressed: () => _registerStudent(context),
+                child: Text('Register')),
           ],
         ),
       ),
